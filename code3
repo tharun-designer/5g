@@ -1,113 +1,81 @@
-#include <iostream>
-#include <vector>
-#include <cstdint>
-#include <string>
-#include <openssl/evp.h>  // Make sure to link OpenSSL for ciphering and integrity protection
-
-class PDCP_Session {
+#include "ns3/core-module.h"
+#include "ns3/network-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/point-to-point-module.h"
+#include "ns3/applications-module.h"
+#include "ns3/udp-socket-factory.h"
+#include "ns3/log.h"
+ 
+using namespace ns3;
+ 
+NS_LOG_COMPONENT_DEFINE("PdcpCipheringApplication");
+ 
+class PdcpCipheringApplication : public Application {
 private:
-    uint32_t TX_NEXT = 0;  // Next transmitting sequence number
-    uint32_t RX_NEXT = 0;  // Next expected receiving sequence number
-    const uint32_t MAX_SN = 4096; // Maximum sequence number (12 bits)
-
+    Ptr<Socket> m_socket;   // Socket for communication
+    Address m_peerAddress;  // Peer address
+    uint16_t m_peerPort;    // Peer port
+ 
+protected:
+    virtual void StartApplication() override {
+        NS_LOG_INFO("Starting PDCP Ciphering Application");
+        m_socket = Socket::CreateSocket(GetNode(), UdpSocketFactory::GetTypeId());
+        m_socket->Bind();
+        m_socket->Connect(InetSocketAddress(Ipv4Address::ConvertFrom(m_peerAddress), m_peerPort));
+        Simulator::Schedule(Seconds(1.0), &PdcpCipheringApplication::SendPacket, this);
+    }
+ 
+    virtual void StopApplication() override {
+        NS_LOG_INFO("Stopping PDCP Ciphering Application");
+        if (m_socket) {
+            m_socket->Close();
+            m_socket = 0;
+        }
+    }
+ 
+    void SendPacket() {
+        NS_LOG_INFO("Sending packet");
+        Ptr<Packet> packet = Create<Packet>(1024);  // Create a packet of 1024 bytes
+        m_socket->Send(packet);
+    }
+ 
 public:
-    // Simulate sending a PDCP packet
-    void send_packet(const std::vector<uint8_t>& data) {
-        std::cout << "Sending packet with SN: " << TX_NEXT << " | Data: ";
-        for (const auto& byte : data) {
-            std::cout << std::hex << static_cast<int>(byte) << " ";
-        }
-        std::cout << std::endl;
-        TX_NEXT = (TX_NEXT + 1) % MAX_SN;  // Increment and wrap around
-    }
-
-    // Simulate receiving a PDCP packet
-    void receive_packet(uint32_t sn) {
-        if (sn == RX_NEXT) {
-            std::cout << "Received packet with SN: " << sn << " successfully.\n";
-            RX_NEXT = (RX_NEXT + 1) % MAX_SN;  // Update the expected SN
-        } else {
-            std::cout << "Error: Received packet with SN: " << sn << ", expected SN: " << RX_NEXT << std::endl;
-            // Handle error: could involve sequence number correction, retransmission requests, etc.
-        }
-    }
-
-    // Simulate header compression (placeholder)
-    std::vector<uint8_t> compress_header(const std::vector<uint8_t>& header) {
-        // Implement header compression logic here (e.g., ROHC)
-        // For demonstration, we will just return the original header
-        return header;
-    }
-
-    // Simulate ciphering (AES encryption)
-    std::vector<uint8_t> cipher_data(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key) {
-        std::vector<uint8_t> ciphertext(data.size());
-        EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-        EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key.data(), NULL);
-
-        int len;
-        EVP_EncryptUpdate(ctx, ciphertext.data(), &len, data.data(), data.size());
-        EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len);
-        EVP_CIPHER_CTX_free(ctx);
-
-        return ciphertext;
-    }
-
-    // Simulate integrity protection (MAC generation)
-    std::vector<uint8_t> generate_mac(const std::vector<uint8_t>& data, const std::vector<uint8_t>& key) {
-        std::vector<uint8_t> mac(EVP_MAX_MD_SIZE);
-        unsigned int mac_len;
-        EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
-        EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL);
-        EVP_DigestUpdate(mdctx, data.data(), data.size());
-        EVP_DigestUpdate(mdctx, key.data(), key.size());
-        EVP_DigestFinal_ex(mdctx, mac.data(), &mac_len);
-        mac.resize(mac_len);
-        EVP_MD_CTX_free(mdctx);
-        return mac;
+    PdcpCipheringApplication() : m_peerPort(0) {}
+ 
+    void Setup(Address address, uint16_t port) {
+        m_peerAddress = address;
+        m_peerPort = port;
     }
 };
-
-int main() {
-    PDCP_Session session;
-
-    // Simulating a normal sequence
-    session.send_packet({0x01, 0x02, 0x03, 0x04});
-    session.receive_packet(0);  // Correct sequence
-
-    session.send_packet({0x05, 0x06, 0x07, 0x08});
-    session.receive_packet(1);  // Correct sequence
-
-    // Introducing an error in sequence
-    session.send_packet({0x09, 0x0A, 0x0B, 0x0C});
-    session.receive_packet(3);  // Incorrect sequence
-
-    // Simulating header compression
-    std::vector<uint8_t> header = {0x45, 0x00, 0x00, 0x28}; // Example IP header
-    std::vector<uint8_t> compressedHeader = session.compress_header(header);
-    std::cout << "Compressed Header: ";
-    for (const auto& byte : compressedHeader) {
-        std::cout << std::hex << static_cast<int>(byte) << " ";
-    }
-    std::cout << std::endl;
-
-    // Simulating ciphering
-    std::vector<uint8_t> key = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F};
-    std::vector<uint8_t> dataToCipher = {0x01, 0x02, 0x03, 0x04};
-    std::vector<uint8_t> ciphertext = session.cipher_data(dataToCipher, key);
-    std::cout << "Ciphertext: ";
-    for (const auto& byte : ciphertext) {
-        std::cout << std::hex << static_cast<int>(byte) << " ";
-    }
-    std::cout << std::endl;
-
-    // Simulating MAC generation
-    std::vector<uint8_t> mac = session.generate_mac(dataToCipher, key);
-    std::cout << "Generated MAC: ";
-    for (const auto& byte : mac) {
-        std::cout << std::hex << static_cast<int>(byte) << " ";
-    }
-    std::cout << std::endl;
-
+ 
+int main(int argc, char *argv[]) {
+    CommandLine cmd;
+    cmd.Parse(argc, argv);
+ 
+    NodeContainer nodes;
+    nodes.Create(2);
+ 
+    PointToPointHelper p2p;
+    p2p.SetDeviceAttribute("DataRate", StringValue("5Mbps"));
+    p2p.SetChannelAttribute("Delay", StringValue("2ms"));
+ 
+    NetDeviceContainer devices = p2p.Install(nodes);
+    InternetStackHelper stack;
+    stack.Install(nodes);
+ 
+    Ipv4AddressHelper address;
+    address.SetBase("10.1.1.0", "255.255.255.0");
+    Ipv4InterfaceContainer interfaces = address.Assign(devices);
+ 
+    uint16_t port = 9;
+    Ptr<PdcpCipheringApplication> pdcpApp = CreateObject<PdcpCipheringApplication>();
+    pdcpApp->Setup(interfaces.GetAddress(1), port);
+    nodes.Get(0)->AddApplication(pdcpApp);
+    pdcpApp->SetStartTime(Seconds(1.0));
+    pdcpApp->SetStopTime(Seconds(10.0));
+ 
+    Simulator::Run();
+    Simulator::Destroy();
+ 
     return 0;
 }
